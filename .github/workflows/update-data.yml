@@ -1,0 +1,51 @@
+# 매달 공공데이터포털에서 주정차 정보를 받아 parking-info.json을 새로 만든다.
+# 앱은 이 저장소의 parking-info.json을 내려받아 쓴다.
+#
+# 필요한 것: 저장소 Settings > Secrets and variables > Actions 에 DATA_GO_KR_KEY (공공데이터포털 Decoding 인증키)
+# 바로 돌려 보기: Actions 탭 > "주정차 정보 데이터 갱신" > Run workflow
+
+name: 주정차 정보 데이터 갱신
+
+on:
+  schedule:
+    # 매달 2일 오전 4시 7분 (한국 시간). cron은 UTC 기준이라 1일 19:07
+    - cron: "7 19 1 * *"
+  workflow_dispatch: {}
+  # CCTV 파일(sources/cctv.json)을 새로 올리면 바로 다시 만든다.
+  push:
+    paths:
+      - "sources/**"
+
+permissions:
+  contents: write   # 새 파일을 이 저장소에 올리기 위해
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 공공데이터 받아서 JSON 만들기
+        env:
+          DATA_GO_KR_KEY: ${{ secrets.DATA_GO_KR_KEY }}
+          # API 주소가 기본값과 다르면 저장소 Variables에 넣는다. (없으면 스크립트 기본값)
+          SCHOOL_API: ${{ vars.SCHOOL_API }}
+          PARKING_API: ${{ vars.PARKING_API }}
+        run: python3 fetch_parking_info.py
+
+      - name: 바뀌었으면 올리기
+        run: |
+          if git diff --quiet -- parking-info.json && git ls-files --error-unmatch parking-info.json >/dev/null 2>&1; then
+            echo "바뀐 내용이 없어요."
+            exit 0
+          fi
+          git config user.name "notiforme-data-bot"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add parking-info.json
+          git commit -m "주정차 정보 데이터 갱신 $(date +%Y-%m-%d)"
+          git push
