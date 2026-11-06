@@ -20,7 +20,8 @@ API 주소는 아래 기본값을 쓰고, 다르면 환경변수(SCHOOL_API, PAR
     "cctv": [위도, 경도, 위도, 경도, ...],
     "schoolZones": [...], "parkingLots": [...],
     "parkingLotNames": ["○○ 공영주차장", ...],   # parkingLots 좌표 순서와 같음
-    "parkingLotAttrs": ["GOP", ...] }           # 구분·유형·요금 세 글자 (G공영/M민영, S노상/O노외, F무료/P유료/X혼합)
+    "parkingLotAttrs": ["GOP", ...],            # 구분·유형·요금 세 글자 (G공영/M민영, S노상/O노외, F무료/P유료/X혼합)
+    "parkingLotSpaces": [120, ...] }            # 주차 면수 (모르면 0)
 """
 
 import datetime
@@ -169,7 +170,8 @@ def main():
     owner_key = find_key(first, "prkplceSe", contains="prkplcese")      # 주차장구분: 공영 / 민영
     type_key = find_key(first, "prkplceType", contains="type")          # 주차장유형: 노상 / 노외 / 부설
     fee_key = find_key(first, "parkingchrgeInfo", contains="chrgeinfo") # 요금정보: 무료 / 유료 / 혼합
-    print(f"  항목: 구분={owner_key} 유형={type_key} 요금={fee_key}")
+    spaces_key = find_key(first, "prkcmprt", contains="cmprt")          # 주차구획수 (몇 대 댈 수 있는지)
+    print(f"  항목: 구분={owner_key} 유형={type_key} 요금={fee_key} 면수={spaces_key}")
     if not (owner_key and type_key and fee_key):
         print(f"  ! 구분·유형·요금 항목을 다 찾지 못했어요. 있는 항목: {list(first.keys())}")
 
@@ -186,12 +188,22 @@ def main():
             + ("X" if "혼합" in fee else "F" if "무료" in fee else "P" if "유료" in fee else "?")
         )
 
+    def spaces(row):
+        """주차 면수. 모르면 0"""
+        try:
+            return max(0, int(float(value(row, spaces_key) or 0)))
+        except ValueError:
+            return 0
+
     # 부설 주차장(건물·아파트에 딸린 곳)은 외부인이 못 쓰는 경우가 많아서 뺀다.
-    parking, parking_names, parking_attrs = extract_points(
+    # extra에는 "특성코드|면수"를 담았다가 아래에서 나눈다.
+    parking, parking_names, parking_extra = extract_points(
         parking_rows, "주차장", name_key=name_key,
         keep=lambda row: "부설" not in value(row, type_key),
-        extra=lot_attrs,
+        extra=lambda row: f"{lot_attrs(row)}|{spaces(row)}",
     )
+    parking_attrs = [item.split("|")[0] for item in parking_extra]
+    parking_spaces = [int(item.split("|")[1]) for item in parking_extra]
     print(f"  공영 {sum(a[0] == 'G' for a in parking_attrs):,}곳 · 무료 {sum(a[2] == 'F' for a in parking_attrs):,}곳 (부설 제외)")
 
     # 너무 적으면 API 형식이 바뀐 것일 수 있으니 덮어쓰지 않는다.
@@ -206,6 +218,7 @@ def main():
         "parkingLots": parking,
         "parkingLotNames": parking_names,
         "parkingLotAttrs": parking_attrs,
+        "parkingLotSpaces": parking_spaces,
     }
     with open("parking-info.json", "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, separators=(",", ":"))
