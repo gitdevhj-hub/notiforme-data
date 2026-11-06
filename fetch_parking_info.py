@@ -56,16 +56,22 @@ def fetch_all(url, key):
             "type": "json",
         })
         body = request_json(f"{url}?{query}")
-        header = body.get("response", {}).get("header", {})
-        if header.get("resultCode") not in (None, "00", "0"):
+        # 응답은 보통 {"response": {"header": ..., "body": ...}} 이지만, response 없이 오는 경우도 있다.
+        root = body.get("response", body) if isinstance(body, dict) else {}
+        header = root.get("header") or {}
+        if str(header.get("resultCode", "00")) not in ("00", "0"):
             sys.exit(f"API 오류 ({url}): {header}")
 
-        data = body.get("response", {}).get("body", {})
+        data = root.get("body") or {}
         items = data.get("items") or []
         if isinstance(items, dict):         # {"item": [...]} 형태도 있다
             items = items.get("item") or []
         if isinstance(items, dict):
             items = [items]
+
+        if page == 1 and not items:
+            # 원인을 볼 수 있도록 받은 응답 앞부분을 남긴다. (응답에 인증키는 들어 있지 않다)
+            print("  받은 응답:", json.dumps(body, ensure_ascii=False)[:1500])
         rows.extend(items)
 
         total = int(data.get("totalCount") or 0)
