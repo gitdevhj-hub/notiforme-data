@@ -16,10 +16,11 @@ API 주소는 아래 기본값을 쓰고, 다르면 환경변수(SCHOOL_API, PAR
 (공공데이터포털 > 마이페이지 > 활용신청한 API > "상세기능"에서 정확한 주소를 확인할 수 있다)
 
 결과 형식은 앱의 ParkingInfoFile 과 같다.
-  { "version": 2, "updatedAt": "2026-11-07",
+  { "version": 3, "updatedAt": "2026-11-07",
     "cctv": [위도, 경도, 위도, 경도, ...],
     "schoolZones": [...], "parkingLots": [...],
-    "parkingLotNames": ["○○ 공영주차장", ...] }   # parkingLots 좌표 순서와 같음
+    "parkingLotNames": ["○○ 공영주차장", ...],   # parkingLots 좌표 순서와 같음
+    "parkingLotAttrs": ["GOP", ...] }           # 구분·유형·요금 세 글자 (G공영/M민영, S노상/O노외, F무료/P유료/X혼합)
 """
 
 import datetime
@@ -114,8 +115,9 @@ def find_key(row, *candidates, contains=None):
     return None
 
 
-def extract_points(rows, label, keep=lambda row: True, name_key=None):
-    """위도·경도를 뽑아 [위도, 경도, ...]로 이어 붙인다. 소수점 5자리(약 1m)로 줄이고 중복을 뺀다."""
+def extract_points(rows, label, keep=lambda row: True, name_key=None, extra=None):
+    """위도·경도를 뽑아 [위도, 경도, ...]로 이어 붙인다. 소수점 5자리(약 1m)로 줄이고 중복을 뺀다.
+    name_key를 주면 이름 목록을, extra(row → 문자열)를 주면 그 값 목록을 같은 순서로 함께 만든다."""
     if not rows:
         sys.exit(f"{label}: 받은 데이터가 없어요.")
     lat_key = find_key(rows[0], "latitude", "lat", "la", contains="lat")
@@ -123,7 +125,7 @@ def extract_points(rows, label, keep=lambda row: True, name_key=None):
     if not lat_key or not lon_key:
         sys.exit(f"{label}: 위도·경도 열을 찾지 못했어요. 있는 열: {list(rows[0].keys())}")
 
-    seen, flat, names = set(), [], []
+    seen, flat, names, extras = set(), [], [], []
     for row in rows:
         if not keep(row):
             continue
@@ -140,7 +142,9 @@ def extract_points(rows, label, keep=lambda row: True, name_key=None):
         flat.extend([lat, lon])
         if name_key:
             names.append((row.get(name_key) or "").strip())
-    return flat, names
+        if extra:
+            extras.append(extra(row))
+    return (flat, names, extras) if extra else (flat, names)
 
 
 def main():
@@ -160,20 +164,48 @@ def main():
 
     print("주차장 받는 중")
     parking_rows = fetch_all(SERVICES["parking"], key)
-    name_key = find_key(parking_rows[0], "prkplceNm", contains="nm") if parking_rows else None
-    parking, parking_names = extract_points(parking_rows, "주차장", name_key=name_key)
+    first = parking_rows[0] if parking_rows else {}
+    name_key = find_key(first, "prkplceNm", contains="nm")
+    owner_key = find_key(first, "prkplceSe", contains="prkplcese")      # 주차장구분: 공영 / 민영
+    type_key = find_key(first, "prkplceType", contains="type")          # 주차장유형: 노상 / 노외 / 부설
+    fee_key = find_key(first, "parkingchrgeInfo", contains="chrgeinfo") # 요금정보: 무료 / 유료 / 혼합
+    print(f"  항목: 구분={owner_key} 유형={type_key} 요금={fee_key}")
+    if not (owner_key and type_key and fee_key):
+        print(f"  ! 구분·유형·요금 항목을 다 찾지 못했어요. 있는 항목: {list(first.keys())}")
+
+    def value(row, key):
+        return str(row.get(key) or "") if key else ""
+
+    def lot_attrs(row):
+        """주차장 특성을 세 글자로 줄인다. 앱의 ParkingLotAttributes와 같은 규칙.
+        1) 구분 G=공영 M=민영  2) 유형 S=노상 O=노외 B=부설  3) 요금 F=무료 P=유료 X=혼합  (모르면 ?)"""
+        owner, kind, fee = value(row, owner_key), value(row, type_key), value(row, fee_key)
+        return (
+            ("G" if "공영" in owner else "M" if "민영" in owner else "?")
+            + ("S" if "노상" in kind else "O" if "노외" in kind else "B" if "부설" in kind else "?")
+            + ("X" if "혼합" in fee else "F" if "무료" in fee else "P" if "유료" in fee else "?")
+        )
+
+    # 부설 주차장(건물·아파트에 딸린 곳)은 외부인이 못 쓰는 경우가 많아서 뺀다.
+    parking, parking_names, parking_attrs = extract_points(
+        parking_rows, "주차장", name_key=name_key,
+        keep=lambda row: "부설" not in value(row, type_key),
+        extra=lot_attrs,
+    )
+    print(f"  공영 {sum(a[0] == 'G' for a in parking_attrs):,}곳 · 무료 {sum(a[2] == 'F' for a in parking_attrs):,}곳 (부설 제외)")
 
     # 너무 적으면 API 형식이 바뀐 것일 수 있으니 덮어쓰지 않는다.
     if len(cctv) // 2 < 100 or len(school) // 2 < 100 or len(parking) // 2 < 100:
         sys.exit(f"받은 개수가 너무 적어요 (CCTV {len(cctv)//2}, 보호구역 {len(school)//2}, 주차장 {len(parking)//2}). 파일을 바꾸지 않아요.")
 
     result = {
-        "version": 2,
+        "version": 3,
         "updatedAt": datetime.date.today().isoformat(),
         "cctv": cctv,
         "schoolZones": school,
         "parkingLots": parking,
         "parkingLotNames": parking_names,
+        "parkingLotAttrs": parking_attrs,
     }
     with open("parking-info.json", "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, separators=(",", ":"))
