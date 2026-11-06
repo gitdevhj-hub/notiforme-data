@@ -11,10 +11,12 @@ on:
     # 매달 2일 오전 4시 7분 (한국 시간). cron은 UTC 기준이라 1일 19:07
     - cron: "7 19 1 * *"
   workflow_dispatch: {}
-  # CCTV 파일(sources/cctv.json)을 새로 올리면 바로 다시 만든다.
+  # CCTV 파일(sources/cctv.json)이나 스크립트를 새로 올리면 바로 다시 만든다.
   push:
     paths:
       - "sources/**"
+      - "fetch_parking_info.py"
+      - ".github/workflows/update-data.yml"
 
 permissions:
   contents: write   # 새 파일을 이 저장소에 올리기 위해

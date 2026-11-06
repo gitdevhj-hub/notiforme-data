@@ -33,8 +33,8 @@ import urllib.request
 
 # (환경변수가 비어 있으면 기본값을 쓴다. GitHub Actions에서 Variables를 안 만들면 빈 값이 들어온다)
 SERVICES = {
-    "school": os.environ.get("SCHOOL_API") or "http://api.data.go.kr/openapi/tn_pubr_public_child_safe_zone_api",
-    "parking": os.environ.get("PARKING_API") or "http://api.data.go.kr/openapi/tn_pubr_prkplce_info_api",
+    "school": os.environ.get("SCHOOL_API") or "https://api.data.go.kr/openapi/tn_pubr_public_child_prtc_zn_api",
+    "parking": os.environ.get("PARKING_API") or "https://api.data.go.kr/openapi/tn_pubr_prkplce_info_api",
 }
 
 PAGE_SIZE = 1000
