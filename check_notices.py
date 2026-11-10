@@ -78,6 +78,14 @@ if releases is not None:
             errors.append(f"{where}: \"date\"는 \"2026-11-11\"처럼 써 주세요.")
         if not isinstance(r.get("items"), list) or not all(isinstance(x, str) for x in r.get("items", [])):
             errors.append(f"{where}: \"items\"는 [\"바뀐 점1\", \"바뀐 점2\"] 처럼 글자 목록이어야 해요.")
+        if "popup" in r and not isinstance(r.get("popup"), bool):
+            errors.append(f"{where}: \"popup\"은 true 또는 false여야 해요. 따옴표 없이 써요.")
+        start, end = parse_time(r.get("start")), parse_time(r.get("end"))
+        for key, value in (("start", start), ("end", end)):
+            if value is False:
+                errors.append(f"{where}: \"{key}\" 날짜 형식이 틀렸어요. \"2026-11-11 09:00\"처럼 써 주세요.")
+        if start and end and start >= end:
+            errors.append(f"{where}: 끝(end)이 시작(start)보다 빨라요.")
 
 if errors:
     print("고칠 곳이 있어요:")
