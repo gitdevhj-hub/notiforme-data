@@ -1,0 +1,23 @@
+# notices.json(공지사항)과 releases.json(업데이트 내역)을 고치면 형식이 맞는지 확인한다.
+# 틀리면 Actions 탭에 빨간 X가 뜨고, 무엇이 틀렸는지 알려준다. (앱은 틀린 파일을 무시하고 마지막으로 받은 내용을 써요)
+
+name: 공지사항·업데이트 내역 확인
+
+on:
+  push:
+    paths:
+      - "notices.json"
+      - "releases.json"
+      - "check_notices.py"
+  workflow_dispatch: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 형식 확인
+        run: python3 check_notices.py
