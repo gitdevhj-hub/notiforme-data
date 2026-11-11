@@ -1,0 +1,17 @@
+# 국가교통정보센터 표준노드링크 페이지에서 내려받기 주소를 찾을 수 있는지 확인한다. (손으로 실행)
+name: 표준노드링크 주소 확인
+on:
+  workflow_dispatch:
+  push:
+    paths: [.github/workflows/check-nodelink.yml]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 페이지 받기
+        run: |
+          curl -sSL -A "Mozilla/5.0" -o page.html -w "HTTP %{http_code}, %{size_download} bytes\n" https://www.its.go.kr/nodelink/nodelinkRef || true
+          echo "--- 내려받기 관련 줄 ---"
+          grep -n -i -E "NODELINK|download|fileDown|\.zip|atchFile|fileSn|fileId|action=|ajax|url *:" page.html | head -80 || true
+          echo "--- script src ---"
+          grep -o -i -E '<script[^>]+src="[^"]+"' page.html | head -30 || true
