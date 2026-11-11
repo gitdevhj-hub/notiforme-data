@@ -24,6 +24,7 @@ on:
 
 permissions:
   contents: write   # 새 파일을 이 저장소에 올리기 위해
+  issues: write     # 실패하거나 주의할 일이 있으면 이슈로 알리기 위해
 
 jobs:
   update:
@@ -63,3 +64,35 @@ jobs:
           [ -f parking-roads.bin ] && git add parking-roads.bin
           git commit -m "주정차 정보 데이터 갱신 $(date +%Y-%m-%d)"
           git push
+
+      # 받기는 됐지만 일부가 빠진 경우 (카메라 API 실패로 지난 데이터 사용, 도로 파일 실패 등)
+      - name: 주의할 일 알리기
+        if: success() && hashFiles('warnings.txt') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "데이터는 갱신했지만 확인할 일이 있어요."
+            echo
+            sed 's/^/    /' warnings.txt
+            echo
+            echo "실행 기록: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo
+            echo "cc @${{ github.repository_owner }}"
+          } | bash .github/notify.sh "주정차 정보 데이터 갱신: 확인 필요"
+
+      - name: 실패 알리기
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "데이터 갱신이 실패했어요. 앱은 지난 데이터를 그대로 써요."
+            echo
+            echo "흔한 원인: 공공데이터포털 인증키 만료(활용기간), API 형식 변경, 공공데이터포털 점검"
+            echo "실행 기록에서 빨간 단계의 마지막 줄을 확인해 주세요: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo
+            echo "고친 뒤 Actions > 주정차 정보 데이터 갱신 > Run workflow 로 다시 돌리고 이 이슈를 닫아 주세요."
+            echo
+            echo "cc @${{ github.repository_owner }}"
+          } | bash .github/notify.sh "주정차 정보 데이터 갱신 실패"

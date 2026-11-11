@@ -107,6 +107,13 @@ def request_json(url, retries=3):
             time.sleep(3 * (attempt + 1))
 
 
+def warn(message):
+    """실패는 아니지만 관리자가 알아야 할 일. Actions가 warnings.txt를 보고 이슈로 알린다."""
+    print(message)
+    with open("warnings.txt", "a", encoding="utf-8") as f:
+        f.write(message.strip() + "\n")
+
+
 def find_key(row, *candidates, contains=None):
     """항목에서 열 이름을 찾는다. 후보 이름이 정확히 있으면 그것을, 없으면 contains가 들어간 이름을 쓴다."""
     keys = list(row.keys())
@@ -160,10 +167,10 @@ def fetch_cameras(key):
     try:
         rows = fetch_all(SERVICES["camera"], key)
     except SystemExit as error:
-        print(f"  ! 무인교통단속카메라를 받지 못했어요 (활용신청·인증키 확인): {error}")
+        warn(f"  ! 무인교통단속카메라를 받지 못했어요 (활용신청·인증키 확인): {error}")
         return None
     if not rows:
-        print("  ! 무인교통단속카메라 데이터가 비어 있어요.")
+        warn("  ! 무인교통단속카메라 데이터가 비어 있어요.")
         return None
     first = rows[0]
     print(f"  있는 항목: {list(first.keys())}")
@@ -268,7 +275,7 @@ def build_roads_file(result, school_roads):
               f"카메라 {stats['attached']:,}/{stats['targets']:,}곳 붙음 → parking-roads.bin ({len(blob)/1024:,.0f} KB)")
         return len(blob)
     except Exception as error:  # 도로 파일은 없어도 앱이 거리로 판단한다
-        print(f"  ! 도로 파일을 만들지 못했어요: {error!r}")
+        warn(f"  ! 도로 파일을 만들지 못했어요: {error!r}")
         return 0
 
 
@@ -287,7 +294,7 @@ def main():
     school_rows = fetch_all(SERVICES["school"], key)
     address_key = find_key(school_rows[0] if school_rows else {}, "rdnmadr", contains="rdnmadr")
     if not address_key:
-        print(f"  ! 도로명주소 항목을 찾지 못했어요. 있는 항목: {list((school_rows or [{}])[0].keys())}")
+        warn(f"  ! 도로명주소 항목을 찾지 못했어요. 있는 항목: {list((school_rows or [{}])[0].keys())}")
     # 시설 주소의 도로 이름(정문 앞 도로일 가능성이 높다). 앱 파일에는 넣지 않고 도로 파일을 만들 때만 쓴다.
     school, _, school_roads = extract_points(
         school_rows, "어린이보호구역",
@@ -305,7 +312,7 @@ def main():
     spaces_key = find_key(first, "prkcmprt", contains="cmprt")          # 주차구획수 (몇 대 댈 수 있는지)
     print(f"  항목: 구분={owner_key} 유형={type_key} 요금={fee_key} 면수={spaces_key}")
     if not (owner_key and type_key and fee_key):
-        print(f"  ! 구분·유형·요금 항목을 다 찾지 못했어요. 있는 항목: {list(first.keys())}")
+        warn(f"  ! 구분·유형·요금 항목을 다 찾지 못했어요. 있는 항목: {list(first.keys())}")
 
     def value(row, key):
         return str(row.get(key) or "") if key else ""

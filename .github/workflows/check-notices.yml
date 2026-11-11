@@ -11,6 +11,10 @@ on:
       - "check_notices.py"
   workflow_dispatch: {}
 
+permissions:
+  contents: read
+  issues: write   # 형식이 틀리면 이슈로 알리기 위해
+
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -21,3 +25,18 @@ jobs:
           python-version: "3.12"
       - name: 형식 확인
         run: python3 check_notices.py
+
+      - name: 틀렸으면 알리기
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "notices.json 또는 releases.json 형식이 틀렸어요. 앱은 틀린 파일을 무시하고 마지막으로 받은 내용을 써요."
+            echo
+            echo "무엇이 틀렸는지: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo
+            echo "고쳐서 다시 올리면 확인이 다시 돌아요. 통과하면 이 이슈를 닫아 주세요."
+            echo
+            echo "cc @${{ github.repository_owner }}"
+          } | bash .github/notify.sh "공지사항·업데이트 내역 형식 오류"
