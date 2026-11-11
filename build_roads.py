@@ -20,6 +20,8 @@ from collections import defaultdict
 PARKING_RANGE = 100     # 주정차 카메라: 같은 도로 100m 안이면 단속될 수 있다고 본다
 ZONE_RANGE = 150        # 어린이보호구역 카메라: 같은 도로 150m 안이면 보호구역 도로일 가능성이 높다
 SNAP = 25               # 차·카메라를 도로에 붙이는 최대 거리 (도로 폭 + GPS 오차)
+SCHOOL_RANGE = 300      # 어린이보호구역: 시설 출입문에서 최대 300m까지 지정된다
+SCHOOL_SNAP = 120       # 시설 위치(건물·운동장 가운데)에서 주소 도로(정문 앞 도로)까지 찾는 거리
 KEEP_MARGIN = SNAP + 5
 
 # ---------------------------------------------------------------- 좌표 변환 (횡메르카토르, GRS80)
@@ -151,12 +153,15 @@ def simplify(line, tolerance=2.0):
 
 
 def build(zip_path, targets):
-    """targets: [(lat, lon, range_m), ...] 카메라 순서대로.
+    """targets: [(lat, lon, range_m, road_name, snap_m), ...] 카메라·시설 순서대로.
+      range_m: 이 거리 안의 도로는 모두 남긴다 (차가 어느 도로에 있는지 가리려면 주변 도로가 다 있어야 해서)
+      road_name: 있으면 이 이름의 도로에만 붙인다 (어린이보호구역 시설의 주소 도로). 없으면 가장 가까운 도로
+      snap_m: 붙이는 최대 거리
     돌려주는 것: (roads, target_roads, stats)
       roads: {"coords": 앞 점과의 차이(1e-5도 정수) [위도, 경도, ...], "lengths": 조각마다 점 수, "groups": 조각마다 도로 번호}
       target_roads: 카메라마다 붙은 도로 번호 (-1: 근처에 도로가 없음)"""
     cell = 250.0
-    target_xy = [to_xy(lat, lon) for lat, lon, _ in targets]
+    target_xy = [to_xy(t[0], t[1]) for t in targets]
     grid = defaultdict(list)
     for i, (x, y) in enumerate(target_xy):
         grid[(int(x // cell), int(y // cell))].append(i)
@@ -168,9 +173,9 @@ def build(zip_path, targets):
         dbf = z.read(member("MOCT_LINK.DBF"))
 
     pieces = []        # (조각 [(x, y), ...], 도로 이름, 링크 번호)
-    best = [(SNAP, -1)] * len(targets)  # 카메라마다 (거리, pieces 번호)
+    best = [(t[4], -1) for t in targets]  # 카메라마다 (거리, (링크, 선분))
     total = 0
-    reach_max = ZONE_RANGE + KEEP_MARGIN
+    reach_max = max(t[2] for t in targets) + KEEP_MARGIN
     for link, (line, (name,)) in enumerate(zip(read_shp(shp), read_dbf(dbf, ["ROAD_NAME"]))):
         total += 1
         if len(line) < 2:
@@ -183,6 +188,7 @@ def build(zip_path, targets):
         if not near:
             continue
         # 카메라 근처에 있는 부분만 남긴다. (긴 링크의 먼 부분은 버린다)
+        label = name.decode("cp949", "replace").strip()
         keep = []
         for k in range(len(line) - 1):
             ax, ay = line[k]
@@ -193,12 +199,12 @@ def build(zip_path, targets):
                 d = point_segment(x, y, ax, ay, bx, by)
                 if d <= targets[i][2] + KEEP_MARGIN:
                     close = True
-                    if d < best[i][0]:
-                        best[i] = (d, (link, k))
+                if d < best[i][0] and (targets[i][3] is None or targets[i][3] == label):
+                    best[i] = (d, (link, k))
+                    close = True
             keep.append(close)
         if not any(keep):
             continue
-        label = name.decode("cp949", "replace").strip()
         k = 0
         while k < len(keep):
             if not keep[k]:
@@ -298,7 +304,7 @@ def _zigzag(value):
     return value * 2 if value >= 0 else -value * 2 - 1
 
 
-def encode(roads, cctv_roads, camera_roads, updated_at):
+def encode(roads, cctv_roads, camera_roads, updated_at, school_roads=None):
     """앱이 빠르게 읽도록 작은 바이너리로 쓴다. (앱의 RoadIndex가 같은 순서로 읽는다)
 
     "NFRD" 1(형식 번호)
@@ -308,10 +314,11 @@ def encode(roads, cctv_roads, camera_roads, updated_at):
     점들: 앞 점과의 차이 (위도, 경도, 1e-5도 정수, zigzag)
     CCTV 수, CCTV마다 도로 번호 + 1 (0: 붙은 도로 없음)
     카메라 수, 카메라마다 도로 번호 + 1
+    (형식 2) 어린이보호구역 시설 수, 시설마다 주소 도로 번호 + 1
     숫자는 모두 varint
     """
     out = bytearray(b"NFRD")
-    out.append(1)
+    out.append(1 if school_roads is None else 2)
     label = updated_at.encode()
     _varint(len(label), out)
     out += label
@@ -321,7 +328,7 @@ def encode(roads, cctv_roads, camera_roads, updated_at):
         _varint(length, out)
     for value in roads["coords"]:
         _varint(_zigzag(value), out)
-    for values in (cctv_roads, camera_roads):
+    for values in (cctv_roads, camera_roads) + (() if school_roads is None else (school_roads,)):
         _varint(len(values), out)
         for value in values:
             _varint(value + 1, out)

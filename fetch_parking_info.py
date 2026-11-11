@@ -29,6 +29,7 @@ import datetime
 import glob
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -226,7 +227,13 @@ def previous_cameras():
         return [], []
 
 
-def build_roads_file(result):
+def address_road(address):
+    """도로명주소에서 도로 이름만: "서울특별시 종로구 세종대로 12" → "세종대로", "중앙로123번길 4" → "중앙로123번길" """
+    match = re.search(r"(\S+(?:대로|로|길))\s+(?:지하\s*)?\d", address)
+    return match.group(1) if match else ""
+
+
+def build_roads_file(result, school_roads):
     """표준노드링크(Release "nodelink"의 zip)가 있으면 카메라를 도로에 붙인 parking-roads.bin을 만든다.
     실패해도 주정차 정보는 그대로 올린다. 앱은 updatedAt이 다른 도로 파일은 쓰지 않는다."""
     zips = sorted(glob.glob("nodelink/*.zip") + glob.glob("nodelink/*.ZIP"))
@@ -237,15 +244,24 @@ def build_roads_file(result):
         import build_roads
         print(f"도로망에 카메라 붙이는 중 ({os.path.basename(zips[-1])})")
         cctv, cameras, attrs = result["cctv"], result["cameras"], result["cameraAttrs"]
-        targets = [(cctv[i], cctv[i + 1], build_roads.PARKING_RANGE) for i in range(0, len(cctv), 2)]
+        targets = [(cctv[i], cctv[i + 1], build_roads.PARKING_RANGE, None, build_roads.SNAP) for i in range(0, len(cctv), 2)]
         for i in range(0, len(cameras), 2):
             code = attrs[i // 2]
             # 어린이보호구역 카메라는 더 넓게, 주정차 카메라는 보통, 그 밖(노인보호구역 과속 등)은 붙이기만
             reach = build_roads.ZONE_RANGE if code[1:2] == "C" else build_roads.PARKING_RANGE if code[:1] == "P" else 0
-            targets.append((cameras[i], cameras[i + 1], reach))
+            targets.append((cameras[i], cameras[i + 1], reach, None, build_roads.SNAP))
+        # 어린이보호구역 시설: 주소 도로(정문 앞 도로)에 붙인다. 주소 도로를 모르면 붙이지 않는다.
+        zones = result["schoolZones"]
+        for i in range(0, len(zones), 2):
+            road = school_roads[i // 2] if i // 2 < len(school_roads) else ""
+            targets.append((zones[i], zones[i + 1], build_roads.SCHOOL_RANGE, road or "\0", build_roads.SCHOOL_SNAP))
         roads, target_roads, stats = build_roads.build(zips[-1], targets)
         count = len(cctv) // 2
-        blob = build_roads.encode(roads, target_roads[:count], target_roads[count:], result["updatedAt"])
+        camera_count = len(cameras) // 2
+        blob = build_roads.encode(
+            roads, target_roads[:count], target_roads[count:count + camera_count], result["updatedAt"],
+            school_roads=target_roads[count + camera_count:],
+        )
         with open("parking-roads.bin", "wb") as f:
             f.write(blob)
         print(f"  링크 {stats['links']:,}개 중 카메라 근처 선 {stats['pieces']:,}개 · 도로 {stats['roads']:,}개 · "
@@ -269,7 +285,15 @@ def main():
 
     print("어린이보호구역 받는 중")
     school_rows = fetch_all(SERVICES["school"], key)
-    school, _ = extract_points(school_rows, "어린이보호구역")
+    address_key = find_key(school_rows[0] if school_rows else {}, "rdnmadr", contains="rdnmadr")
+    if not address_key:
+        print(f"  ! 도로명주소 항목을 찾지 못했어요. 있는 항목: {list((school_rows or [{}])[0].keys())}")
+    # 시설 주소의 도로 이름(정문 앞 도로일 가능성이 높다). 앱 파일에는 넣지 않고 도로 파일을 만들 때만 쓴다.
+    school, _, school_roads = extract_points(
+        school_rows, "어린이보호구역",
+        extra=lambda row: address_road(str(row.get(address_key) or "")) if address_key else "",
+    )
+    print(f"  주소에서 도로 이름을 찾은 시설 {sum(bool(r) for r in school_roads):,}곳")
 
     print("주차장 받는 중")
     parking_rows = fetch_all(SERVICES["parking"], key)
@@ -341,7 +365,7 @@ def main():
         json.dump(result, f, ensure_ascii=False, separators=(",", ":"))
 
     size = os.path.getsize("parking-info.json")
-    roads_bytes = build_roads_file(result)
+    roads_bytes = build_roads_file(result, school_roads)
 
     # 앱이 "새 데이터가 있는지"만 가볍게 확인하는 작은 파일
     meta = {
