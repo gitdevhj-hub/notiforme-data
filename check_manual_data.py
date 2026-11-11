@@ -2,7 +2,7 @@
 
 1. 단속 CCTV (전국CCTV표준데이터, CSV로만 받을 수 있음)
    공공데이터포털 페이지에서 원본 수정일을 읽어, 우리 데이터 기준일보다 새로우면 알린다.
-   페이지를 읽지 못하면 우리 데이터 기준일에서 6개월이 지났을 때 알린다.
+   그와 별개로 우리 데이터 기준일에서 6개월이 지나면 알린다.
 2. 도로망 (표준노드링크, Release "nodelink")
    올린 지 1년이 지나면 알린다. (국가교통정보센터는 해외 접속이 막혀 새 파일이 나왔는지 확인할 수 없다)
 3. 공공데이터포털 인증키 활용기간
@@ -60,8 +60,9 @@ how_cctv = f"""하는 방법 (README "단속 CCTV"):
 """
 if ours and source and source > ours:
     due("단속 CCTV 데이터 갱신 필요", f"공공데이터포털의 전국CCTV표준데이터가 새로 바뀌었어요. (원본 {source}, 우리 데이터 {ours})\n\n{how_cctv}")
-elif ours and not source and (TODAY - ours).days > 183:
-    due("단속 CCTV 데이터 갱신 필요", f"우리 단속 CCTV 데이터가 6개월 넘었어요. (기준일 {ours})\n원본이 바뀌었는지 페이지에서 확인하지 못해서 기간으로 알려드려요.\n\n{how_cctv}")
+elif ours and (TODAY - ours).days > 183:
+    # 페이지의 수정일이 실제 데이터보다 늦게 바뀌는 경우도 있어서, 6개월이 지나면 원본과 관계없이 알린다.
+    due("단속 CCTV 데이터 갱신 필요", f"우리 단속 CCTV 데이터가 6개월 넘었어요. (기준일 {ours}, 원본 페이지 날짜 {source or '확인 못 함'})\n새 데이터가 있는지 확인해 주세요.\n\n{how_cctv}")
 
 # 2. 도로망
 published = parse_date(os.environ.get("NODELINK_PUBLISHED", ""))
