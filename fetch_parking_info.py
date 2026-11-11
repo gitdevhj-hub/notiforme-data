@@ -11,7 +11,7 @@ GitHub Actions가 매달 자동으로 실행한다. (.github/workflows/update-da
      (전국CCTV표준데이터는 오픈API가 없어서, CSV를 받아 build_cctv.py로 미리 만들어 둔다)
   2. 전국어린이보호구역표준데이터 (오픈API) → 보호구역 시설 위치
   3. 전국주차장정보표준데이터 (오픈API)     → 주차장 위치와 이름
-  4. 전국무인교통단속카메라표준데이터 (오픈API, 경찰청) → 단속 카메라 위치·단속구분·제한속도·방향·보호구역
+  4. 전국무인교통단속카메라표준데이터 (오픈API, 경찰청) → 주정차 단속 카메라, 어린이·노인보호구역 카메라 (과속·신호만 하는 카메라는 뺀다)
 
 API 주소는 아래 기본값을 쓰고, 다르면 환경변수(SCHOOL_API, PARKING_API)로 바꾼다.
 (공공데이터포털 > 마이페이지 > 활용신청한 API > "상세기능"에서 정확한 주소를 확인할 수 있다)
@@ -175,16 +175,43 @@ def fetch_cameras(key):
     def clean(row, key):
         return str(row.get(key) or "").replace("|", " ").strip() if key else ""
 
+    def codes(text):
+        """"01+02", "4", "04" → {"1", "2"} / {"4"} (앞의 0을 뗀다)"""
+        return {part.strip().lstrip("0") for part in text.replace(",", "+").split("+") if part.strip()}
+
+    def camera_kind(row):
+        """단속구분 → 한 글자. 실제 데이터의 설치장소·제한속도로 확인한 뜻:
+        1 과속(S), 2 신호·과속(T), 3·4 주정차 등(P, 제한속도 0이 많음), 99 그 밖(O, 구간단속 등)"""
+        found = codes(clean(row, kind_key))
+        if found & {"3", "4"}: return "P"
+        if "2" in found: return "T"
+        if "1" in found: return "S"
+        return "O"
+
+    def camera_zone(row):
+        """보호구역구분 → 한 글자. 2 어린이(C), 1 노인(E), 99·빈칸 없음(-)"""
+        found = codes(clean(row, zone_key))
+        if "2" in found: return "C"
+        if "1" in found: return "E"
+        return "-"
+
+    def speed(row):
+        try:
+            return str(int(float(clean(row, limit_key) or 0)))
+        except ValueError:
+            return "0"
+
+    def keep(row):
+        """주차와 관계있는 카메라만 남긴다: 주정차 단속 카메라, 어린이·노인보호구역 카메라"""
+        return camera_kind(row) == "P" or camera_zone(row) in ("C", "E")
+
+    # 특성: "종류보호구역|제한속도|설치장소" 예) "PC|30|○○초교 앞"  (설치장소는 40자까지)
     points, _, attrs = extract_points(
-        rows, "무인교통단속카메라",
-        extra=lambda row: "|".join(clean(row, k) for k in (kind_key, limit_key, dir_key, zone_key, place_key)),
+        rows, "무인교통단속카메라", keep=keep,
+        extra=lambda row: f"{camera_kind(row)}{camera_zone(row)}|{speed(row)}|{clean(row, place_key)[:40]}",
     )
     from collections import Counter
-    kinds = Counter(a.split("|")[0] for a in attrs)
-    zones = Counter(a.split("|")[3] for a in attrs)
-    dirs = Counter(a.split("|")[2] for a in attrs)
-    print(f"  {len(points)//2:,}곳 · 단속구분 {dict(kinds.most_common(10))}")
-    print(f"  보호구역구분 {dict(zones.most_common(10))} · 방향 {dict(dirs.most_common(10))}")
+    print(f"  전체 {len(rows):,}곳 중 주차 관련 {len(points)//2:,}곳 남김 · 종류 {dict(Counter(a[:2] for a in attrs).most_common())}")
     return points, attrs
 
 
@@ -277,7 +304,7 @@ def main():
         "parkingLotSpaces": parking_spaces,
         # 무인교통단속카메라 (경찰청). 앱의 예전 버전은 이 항목을 읽지 않고 그냥 넘어간다.
         "cameras": camera_points,
-        "cameraAttrs": camera_attrs,   # "단속구분|제한속도|도로노선방향|보호구역구분|설치장소"
+        "cameraAttrs": camera_attrs,   # "종류보호구역|제한속도|설치장소". 종류 P주정차 S과속 T신호 O그밖, 보호구역 C어린이 E노인 -없음
     }
     with open("parking-info.json", "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, separators=(",", ":"))
