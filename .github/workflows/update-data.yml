@@ -38,16 +38,17 @@ jobs:
           # API 주소가 기본값과 다르면 저장소 Variables에 넣는다. (없으면 스크립트 기본값)
           SCHOOL_API: ${{ vars.SCHOOL_API }}
           PARKING_API: ${{ vars.PARKING_API }}
+          CAMERA_API: ${{ vars.CAMERA_API }}
         run: python3 fetch_parking_info.py
 
       - name: 바뀌었으면 올리기
         run: |
-          if git diff --quiet -- parking-info.json && git ls-files --error-unmatch parking-info.json >/dev/null 2>&1; then
+          if git diff --quiet -- parking-info.json parking-info-meta.json && git ls-files --error-unmatch parking-info-meta.json >/dev/null 2>&1; then
             echo "바뀐 내용이 없어요."
             exit 0
           fi
           git config user.name "notiforme-data-bot"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add parking-info.json
+          git add parking-info.json parking-info-meta.json
           git commit -m "주정차 정보 데이터 갱신 $(date +%Y-%m-%d)"
           git push

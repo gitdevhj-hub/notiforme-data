@@ -11,6 +11,7 @@ GitHub Actions가 매달 자동으로 실행한다. (.github/workflows/update-da
      (전국CCTV표준데이터는 오픈API가 없어서, CSV를 받아 build_cctv.py로 미리 만들어 둔다)
   2. 전국어린이보호구역표준데이터 (오픈API) → 보호구역 시설 위치
   3. 전국주차장정보표준데이터 (오픈API)     → 주차장 위치와 이름
+  4. 전국무인교통단속카메라표준데이터 (오픈API, 경찰청) → 단속 카메라 위치·단속구분·제한속도·방향·보호구역
 
 API 주소는 아래 기본값을 쓰고, 다르면 환경변수(SCHOOL_API, PARKING_API)로 바꾼다.
 (공공데이터포털 > 마이페이지 > 활용신청한 API > "상세기능"에서 정확한 주소를 확인할 수 있다)
@@ -37,6 +38,8 @@ import urllib.request
 SERVICES = {
     "school": os.environ.get("SCHOOL_API") or "https://api.data.go.kr/openapi/tn_pubr_public_child_prtc_zn_api",
     "parking": os.environ.get("PARKING_API") or "https://api.data.go.kr/openapi/tn_pubr_prkplce_info_api",
+    # 전국무인교통단속카메라표준데이터 (경찰청). 활용신청이 안 돼 있으면 건너뛰고 지난 데이터를 그대로 쓴다.
+    "camera": os.environ.get("CAMERA_API") or "https://api.data.go.kr/openapi/tn_pubr_public_unmanned_traffic_camera_api",
 }
 
 PAGE_SIZE = 1000
@@ -148,6 +151,53 @@ def extract_points(rows, label, keep=lambda row: True, name_key=None, extra=None
     return (flat, names, extras) if extra else (flat, names)
 
 
+def fetch_cameras(key):
+    """무인교통단속카메라를 받아 (좌표, 특성) 두 목록으로 돌려준다. 실패하면 None (지난 데이터를 그대로 쓴다)
+    특성은 "단속구분|제한속도|도로노선방향|보호구역구분|설치장소" 글자. 코드 값은 원본 그대로 둔다."""
+    print("무인교통단속카메라 받는 중")
+    try:
+        rows = fetch_all(SERVICES["camera"], key)
+    except SystemExit as error:
+        print(f"  ! 무인교통단속카메라를 받지 못했어요 (활용신청·인증키 확인): {error}")
+        return None
+    if not rows:
+        print("  ! 무인교통단속카메라 데이터가 비어 있어요.")
+        return None
+    first = rows[0]
+    print(f"  있는 항목: {list(first.keys())}")
+    kind_key = find_key(first, "regltSe", contains="regltse")          # 단속구분
+    limit_key = find_key(first, "lmttVe", contains="lmtt")            # 제한속도
+    dir_key = find_key(first, "roadRouteDrc", contains="drc")         # 도로노선방향
+    zone_key = find_key(first, "prtcareaType", contains="prtcarea")   # 보호구역구분
+    place_key = find_key(first, "itlpc", contains="itlpc")            # 설치장소
+    print(f"  항목: 단속구분={kind_key} 제한속도={limit_key} 방향={dir_key} 보호구역={zone_key} 설치장소={place_key}")
+
+    def clean(row, key):
+        return str(row.get(key) or "").replace("|", " ").strip() if key else ""
+
+    points, _, attrs = extract_points(
+        rows, "무인교통단속카메라",
+        extra=lambda row: "|".join(clean(row, k) for k in (kind_key, limit_key, dir_key, zone_key, place_key)),
+    )
+    from collections import Counter
+    kinds = Counter(a.split("|")[0] for a in attrs)
+    zones = Counter(a.split("|")[3] for a in attrs)
+    dirs = Counter(a.split("|")[2] for a in attrs)
+    print(f"  {len(points)//2:,}곳 · 단속구분 {dict(kinds.most_common(10))}")
+    print(f"  보호구역구분 {dict(zones.most_common(10))} · 방향 {dict(dirs.most_common(10))}")
+    return points, attrs
+
+
+def previous_cameras():
+    """지난번 파일에 있던 카메라 (이번에 못 받았을 때 쓴다)"""
+    try:
+        with open("parking-info.json", encoding="utf-8") as f:
+            old = json.load(f)
+        return old.get("cameras") or [], old.get("cameraAttrs") or []
+    except (OSError, json.JSONDecodeError):
+        return [], []
+
+
 def main():
     key = os.environ.get("DATA_GO_KR_KEY", "").strip()
     if not key:
@@ -206,6 +256,12 @@ def main():
     parking_spaces = [int(item.split("|")[1]) for item in parking_extra]
     print(f"  공영 {sum(a[0] == 'G' for a in parking_attrs):,}곳 · 무료 {sum(a[2] == 'F' for a in parking_attrs):,}곳 (부설 제외)")
 
+    cameras = fetch_cameras(key)
+    if cameras is None:
+        cameras = previous_cameras()
+        print(f"  지난 데이터의 카메라 {len(cameras[0])//2:,}곳을 그대로 써요.")
+    camera_points, camera_attrs = cameras
+
     # 너무 적으면 API 형식이 바뀐 것일 수 있으니 덮어쓰지 않는다.
     if len(cctv) // 2 < 100 or len(school) // 2 < 100 or len(parking) // 2 < 100:
         sys.exit(f"받은 개수가 너무 적어요 (CCTV {len(cctv)//2}, 보호구역 {len(school)//2}, 주차장 {len(parking)//2}). 파일을 바꾸지 않아요.")
@@ -219,13 +275,27 @@ def main():
         "parkingLotNames": parking_names,
         "parkingLotAttrs": parking_attrs,
         "parkingLotSpaces": parking_spaces,
+        # 무인교통단속카메라 (경찰청). 앱의 예전 버전은 이 항목을 읽지 않고 그냥 넘어간다.
+        "cameras": camera_points,
+        "cameraAttrs": camera_attrs,   # "단속구분|제한속도|도로노선방향|보호구역구분|설치장소"
     }
     with open("parking-info.json", "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, separators=(",", ":"))
 
-    size_kb = os.path.getsize("parking-info.json") / 1024
-    print(f"단속 CCTV {len(cctv)//2:,}곳 · 어린이보호구역 {len(school)//2:,}곳 · 주차장 {len(parking)//2:,}곳")
-    print(f"→ parking-info.json ({size_kb:,.0f} KB)")
+    size = os.path.getsize("parking-info.json")
+    # 앱이 "새 데이터가 있는지"만 가볍게 확인하는 작은 파일
+    meta = {
+        "updatedAt": result["updatedAt"],
+        "bytes": size,
+        "counts": {
+            "cctv": len(cctv) // 2, "schoolZones": len(school) // 2,
+            "parkingLots": len(parking) // 2, "cameras": len(camera_points) // 2,
+        },
+    }
+    with open("parking-info-meta.json", "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2)
+    print(f"단속 CCTV {len(cctv)//2:,}곳 · 어린이보호구역 {len(school)//2:,}곳 · 주차장 {len(parking)//2:,}곳 · 무인단속카메라 {len(camera_points)//2:,}곳")
+    print(f"→ parking-info.json ({size/1024:,.0f} KB)")
 
 
 if __name__ == "__main__":
