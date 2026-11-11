@@ -11,11 +11,15 @@ on:
     # 매달 2일 오전 4시 7분 (한국 시간). cron은 UTC 기준이라 1일 19:07
     - cron: "7 19 1 * *"
   workflow_dispatch: {}
+  # 표준노드링크(Release "nodelink")를 새로 올리면 도로 파일을 다시 만든다.
+  release:
+    types: [published, edited]
   # CCTV 파일(sources/cctv.json)이나 스크립트를 새로 올리면 바로 다시 만든다.
   push:
     paths:
       - "sources/**"
       - "fetch_parking_info.py"
+      - "build_roads.py"
       - ".github/workflows/update-data.yml"
 
 permissions:
@@ -32,6 +36,11 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: 표준노드링크 받기 (Release "nodelink"의 zip, 없으면 건너뜀)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download nodelink --pattern "*.zip" --dir nodelink || echo "도로망 파일이 없어요."
+
       - name: 공공데이터 받아서 JSON 만들기
         env:
           DATA_GO_KR_KEY: ${{ secrets.DATA_GO_KR_KEY }}
@@ -43,12 +52,14 @@ jobs:
 
       - name: 바뀌었으면 올리기
         run: |
-          if git diff --quiet -- parking-info.json parking-info-meta.json && git ls-files --error-unmatch parking-info-meta.json >/dev/null 2>&1; then
+          git add -N parking-roads.bin 2>/dev/null || true
+          if git diff --quiet -- parking-info.json parking-info-meta.json parking-roads.bin && git ls-files --error-unmatch parking-info-meta.json >/dev/null 2>&1; then
             echo "바뀐 내용이 없어요."
             exit 0
           fi
           git config user.name "notiforme-data-bot"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add parking-info.json parking-info-meta.json
+          [ -f parking-roads.bin ] && git add parking-roads.bin
           git commit -m "주정차 정보 데이터 갱신 $(date +%Y-%m-%d)"
           git push

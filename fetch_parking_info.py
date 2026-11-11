@@ -26,6 +26,7 @@ API 주소는 아래 기본값을 쓰고, 다르면 환경변수(SCHOOL_API, PAR
 """
 
 import datetime
+import glob
 import json
 import os
 import sys
@@ -225,6 +226,36 @@ def previous_cameras():
         return [], []
 
 
+def build_roads_file(result):
+    """표준노드링크(Release "nodelink"의 zip)가 있으면 카메라를 도로에 붙인 parking-roads.bin을 만든다.
+    실패해도 주정차 정보는 그대로 올린다. 앱은 updatedAt이 다른 도로 파일은 쓰지 않는다."""
+    zips = sorted(glob.glob("nodelink/*.zip") + glob.glob("nodelink/*.ZIP"))
+    if not zips:
+        print("도로망(nodelink/*.zip)이 없어서 도로 파일은 만들지 않아요.")
+        return 0
+    try:
+        import build_roads
+        print(f"도로망에 카메라 붙이는 중 ({os.path.basename(zips[-1])})")
+        cctv, cameras, attrs = result["cctv"], result["cameras"], result["cameraAttrs"]
+        targets = [(cctv[i], cctv[i + 1], build_roads.PARKING_RANGE) for i in range(0, len(cctv), 2)]
+        for i in range(0, len(cameras), 2):
+            code = attrs[i // 2]
+            # 어린이보호구역 카메라는 더 넓게, 주정차 카메라는 보통, 그 밖(노인보호구역 과속 등)은 붙이기만
+            reach = build_roads.ZONE_RANGE if code[1:2] == "C" else build_roads.PARKING_RANGE if code[:1] == "P" else 0
+            targets.append((cameras[i], cameras[i + 1], reach))
+        roads, target_roads, stats = build_roads.build(zips[-1], targets)
+        count = len(cctv) // 2
+        blob = build_roads.encode(roads, target_roads[:count], target_roads[count:], result["updatedAt"])
+        with open("parking-roads.bin", "wb") as f:
+            f.write(blob)
+        print(f"  링크 {stats['links']:,}개 중 카메라 근처 선 {stats['pieces']:,}개 · 도로 {stats['roads']:,}개 · "
+              f"카메라 {stats['attached']:,}/{stats['targets']:,}곳 붙음 → parking-roads.bin ({len(blob)/1024:,.0f} KB)")
+        return len(blob)
+    except Exception as error:  # 도로 파일은 없어도 앱이 거리로 판단한다
+        print(f"  ! 도로 파일을 만들지 못했어요: {error!r}")
+        return 0
+
+
 def main():
     key = os.environ.get("DATA_GO_KR_KEY", "").strip()
     if not key:
@@ -310,10 +341,13 @@ def main():
         json.dump(result, f, ensure_ascii=False, separators=(",", ":"))
 
     size = os.path.getsize("parking-info.json")
+    roads_bytes = build_roads_file(result)
+
     # 앱이 "새 데이터가 있는지"만 가볍게 확인하는 작은 파일
     meta = {
         "updatedAt": result["updatedAt"],
         "bytes": size,
+        "roadsBytes": roads_bytes,
         "counts": {
             "cctv": len(cctv) // 2, "schoolZones": len(school) // 2,
             "parkingLots": len(parking) // 2, "cameras": len(camera_points) // 2,
