@@ -1,0 +1,38 @@
+# 관리자가 손으로 갱신하는 데이터(단속 CCTV, 도로망, 인증키)가 오래됐는지 매달 확인하고, 때가 되면 이슈로 알린다.
+name: 손으로 갱신할 데이터 확인
+
+on:
+  schedule:
+    - cron: "17 1 3 * *"   # 매달 3일 10:17 (한국 시간)
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 날짜 확인
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DATA_KEY_EXPIRES: ${{ vars.DATA_KEY_EXPIRES }}
+        run: |
+          export NODELINK_PUBLISHED=$(gh api repos/${{ github.repository }}/releases/tags/nodelink --jq .published_at 2>/dev/null || true)
+          python3 check_manual_data.py
+
+      - name: 알릴 일 이슈로
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s nullglob
+          for file in notices-due/*.md; do
+            title=$(basename "$file" .md)
+            { cat "$file"; echo; echo "끝나면 이 이슈를 닫아 주세요."; echo; echo "cc @${{ github.repository_owner }}"; } | bash .github/notify.sh "$title"
+          done
